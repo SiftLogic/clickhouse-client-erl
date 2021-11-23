@@ -1,22 +1,19 @@
-## shallow clone for speed
+REBAR = ./rebar3
 
-REBAR_GIT_CLONE_OPTIONS += --depth 1
-export REBAR_GIT_CLONE_OPTIONS
-
-REBAR = rebar3
 all: compile
 
-compile:
+$(REBAR):
+	wget https://s3.amazonaws.com/rebar3/rebar3 -O $(REBAR)
+	chmod +x $(REBAR)
+
+compile: $(REBAR)
 	$(REBAR) compile
 
-ct: compile
-	$(REBAR) as test ct -v
-
-eunit: compile
-	$(REBAR) as test eunit
-
-xref:
+xref: $(REBAR)
 	$(REBAR) xref
+
+format: $(REBAR)
+	@$(REBAR) format
 
 clean: distclean
 
