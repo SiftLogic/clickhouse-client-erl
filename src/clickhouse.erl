@@ -89,7 +89,7 @@ connect(State) ->
              undefined ->
                  case maps:get(database, State, undefined) of
                      undefined -> "";
-                     DB -> "?database=" ++ to_list(DB)
+                     DB -> "database=" ++ to_list(DB)
                  end;
              ValidQS -> ValidQS
          end,
@@ -100,7 +100,7 @@ connect(State) ->
     {ok, Con} = gun:open(Host, Port),
     {ok, _Protocol} = gun:await_up(Con),
     State#{con => Con, headers => Headers,
-           f_path => Path ++ QS}.
+           f_path => Path ++ "?" ++ QS}.
 
 make_query(SQL,
            #{con := Con, headers := Headers, f_path := FPath}) ->
