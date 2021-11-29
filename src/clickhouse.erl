@@ -144,9 +144,16 @@ process_response(Con, StreamRef, Status, RespHeaders,
                     {error, Error}
             end;
         false ->
-            ?LOG_DEBUG("Clickhouse client return ~p (~p)",
-                       [Status, RespHeaders]),
-            {error, {Status, RespHeadersMap}}
+            Body = case gun:await_body(Con,
+                                       StreamRef,
+                                       ?BODY_TIMEOUT)
+                       of
+                       {ok, B} -> B;
+                       Any -> <<>>
+                   end,
+            ?LOG_DEBUG("Clickhouse client return ~p (~p) ~p",
+                       [Status, RespHeaders, Body]),
+            {error, {Status, RespHeadersMap, Body}}
     end.
 
 process_body(_RespHeadersMap, Body) -> Body.
