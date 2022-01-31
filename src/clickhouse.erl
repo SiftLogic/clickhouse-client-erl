@@ -15,6 +15,8 @@
 
 -include_lib("kernel/include/logger.hrl").
 
+-define(CONNECTION_TIMEOUT, 3 * 1000). % 3 s
+
 -define(TIMEOUT, 30 * 1000). % 30 s
 
 -define(BODY_TIMEOUT, 60 * 1000). % 60 s
@@ -44,7 +46,9 @@ execute(Pool, SQL) ->
 start_link(Opts) ->
     gen_server:start_link(?MODULE, [Opts], []).
 
-init([Opts]) -> {ok, connect(Opts)}.
+init([Opts]) ->
+    timer:send_after(0, connect),
+    {ok, Opts}.
 
 handle_call({query, SQL}, _From, State) ->
     {reply, make_query(SQL, State), State};
@@ -58,14 +62,21 @@ handle_cast({query, SQL}, State) ->
     {noreply, State};
 handle_cast(_Msg, State) -> {noreply, State}.
 
+handle_info(connect, State) ->
+    {noreply, connect(State)};
 handle_info({gun_error, Con, _StreamRef, Error},
             #{con := Con} = State) ->
     ?LOG_ERROR("Clickhouse client error - ~p", [Error]),
     gun:shutdown(Con),
-    {noreply, connect(State)};
-handle_info({gun_down, _, _, _, _, _}, State) ->
-    {noreply, connect(State)};
-handle_info(_Info, State) -> {noreply, State}.
+    timer:send_after(?CONNECTION_TIMEOUT, connect),
+    {noreply, State};
+handle_info({gun_down, _, _, _, _, _} = Error, State) ->
+    ?LOG_DEBUG("HTTP client down - ~p", [Error]),
+    timer:send_after(?CONNECTION_TIMEOUT, connect),
+    {noreply, State};
+handle_info(Info, State) ->
+    ?LOG_DEBUG("Unknown message - ~p", [Info]),
+    {noreply, State}.
 
 terminate(_Reason, #{con := Con}) when is_pid(Con) ->
     gun:shutdown(Con),
@@ -97,10 +108,24 @@ connect(State) ->
                 to_binary(maps:get(user, State, <<"default">>))},
                {<<"X-ClickHouse-Key">>,
                 to_binary(maps:get(password, State, <<"">>))}],
-    {ok, Con} = gun:open(Host, Port),
-    {ok, _Protocol} = gun:await_up(Con),
-    State#{con => Con, headers => Headers,
-           f_path => Path ++ "?" ++ QS}.
+    case gun:open(Host, Port) of
+        {ok, Con} ->
+            case gun:await_up(Con) of
+                {ok, _Protocol} ->
+                    State#{con => Con, headers => Headers,
+                           f_path => Path ++ "?" ++ QS};
+                AwaitError ->
+                    ?LOG_ERROR("Can't await connection ~p up - ~p",
+                               [URI, AwaitError]),
+                    timer:send_after(?CONNECTION_TIMEOUT, connect),
+                    State
+            end;
+        OpenError ->
+            ?LOG_ERROR("Can't open connection ~p up - ~p",
+                       [URI, OpenError]),
+            timer:send_after(?CONNECTION_TIMEOUT, connect),
+            State
+    end.
 
 make_query(SQL,
            #{con := Con, headers := Headers, f_path := FPath}) ->
@@ -149,7 +174,7 @@ process_response(Con, StreamRef, Status, RespHeaders,
                                        ?BODY_TIMEOUT)
                        of
                        {ok, B} -> B;
-                       Any -> <<>>
+                       _Any -> <<>>
                    end,
             ?LOG_DEBUG("Clickhouse client return ~p (~p) ~p",
                        [Status, RespHeaders, Body]),
