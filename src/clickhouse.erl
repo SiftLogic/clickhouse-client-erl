@@ -70,10 +70,6 @@ handle_info({gun_error, Con, _StreamRef, Error},
     gun:shutdown(Con),
     timer:send_after(?CONNECTION_TIMEOUT, connect),
     {noreply, State};
-handle_info({gun_down, _, _, _, _, _} = Error, State) ->
-    ?LOG_DEBUG("HTTP client down - ~p", [Error]),
-    timer:send_after(?CONNECTION_TIMEOUT, connect),
-    {noreply, State};
 handle_info(Info, State) ->
     ?LOG_DEBUG("Unknown message - ~p", [Info]),
     {noreply, State}.
