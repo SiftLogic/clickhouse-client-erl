@@ -4,7 +4,7 @@ Strart with
 ```
 1> clickhouse:make_pool(default, #{ url => "http://127.0.0.1:8123/?database=default", user => "default", password => "" }, 2, 8).                     
 {ok,<0.273.0>}
-2> clickhouse:query(default, <<"SELECT 1">>).
+2> clickhouse:query(default, <<"SELECT 1;">>).
 {ok,#{<<"connection">> => <<"Keep-Alive">>,
       <<"content-type">> =>
           <<"text/tab-separated-values; charset=UTF-8">>,

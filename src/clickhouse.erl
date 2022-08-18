@@ -16,10 +16,9 @@
 -include_lib("kernel/include/logger.hrl").
 
 -define(CONNECTION_TIMEOUT, 3 * 1000). % 3 s
-
 -define(TIMEOUT, 30 * 1000). % 30 s
-
 -define(BODY_TIMEOUT, 60 * 1000). % 60 s
+
 
 make_pool(PoolName, Params, Start, Max) ->
     pooler_sup:new_pool([{name, PoolName},
@@ -48,18 +47,26 @@ start_link(Opts) ->
 
 init([Opts]) ->
     timer:send_after(0, connect),
-    {ok, Opts}.
+    case maps:get(bulk_send_period, Opts, 0) of
+        0 ->
+            {ok, Opts#{ bulk_timer => undefined }};
+        N ->
+            {ok, BulkTimer} = timer:send_interval(N * 1000, bulk_send),
+            {ok, Opts#{ bulk_timer => BulkTimer, queries => [] }}
+    end.
 
 handle_call({query, SQL}, _From, State) ->
     {reply, make_query(SQL, State), State};
 handle_call(_Request, _From, State) ->
     {reply, ignored, State}.
 
-handle_cast({query, SQL}, State) ->
+handle_cast({query, SQL}, #{ bulk_timer := undefined } = State) ->
     Result = make_query(SQL, State),
     ?LOG_DEBUG("Clickhouse result for ~p - ~p",
                [SQL, Result]),
     {noreply, State};
+handle_cast({query, SQL}, #{ queries := Qs } = State) ->
+    {noreply, State#{ queries => Qs ++ [SQL] }};
 handle_cast(_Msg, State) -> {noreply, State}.
 
 handle_info(connect, State) ->
@@ -70,6 +77,11 @@ handle_info({gun_error, Con, _StreamRef, Error},
     gun:shutdown(Con),
     timer:send_after(?CONNECTION_TIMEOUT, connect),
     {noreply, State};
+handle_info(bulk_send, #{ queries := Qs } = State) ->
+    Result = make_query(iolist_to_binary(Qs), State),
+    ?LOG_DEBUG("Clickhouse result for ~p - ~p",
+               [Qs, Result]),
+    {noreply, State#{ queries => [] }};
 handle_info(Info, State) ->
     ?LOG_DEBUG("Unknown message - ~p", [Info]),
     {noreply, State}.
