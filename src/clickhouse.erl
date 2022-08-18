@@ -82,7 +82,8 @@ handle_info({gun_error, Con, _StreamRef, Error},
 handle_info(bulk_send, #{queries := []} = State) ->
     {noreply, State};
 handle_info(bulk_send, #{queries := Qs} = State) ->
-    Result = make_query(iolist_to_binary(Qs), State),
+    Result = lists:map(fun (Q) -> make_query(Q, State) end,
+                       Qs),
     ?LOG_DEBUG("Clickhouse result for ~p - ~p",
                [Qs, Result]),
     {noreply, State#{queries => []}};
