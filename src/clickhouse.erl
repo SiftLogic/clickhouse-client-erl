@@ -79,6 +79,8 @@ handle_info({gun_error, Con, _StreamRef, Error},
     gun:shutdown(Con),
     timer:send_after(?CONNECTION_TIMEOUT, connect),
     {noreply, State};
+handle_info(bulk_send, #{queries := []} = State) ->
+    {noreply, State};
 handle_info(bulk_send, #{queries := Qs} = State) ->
     Result = make_query(iolist_to_binary(Qs), State),
     ?LOG_DEBUG("Clickhouse result for ~p - ~p",
