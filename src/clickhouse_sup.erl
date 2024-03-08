@@ -9,5 +9,5 @@ start_link() ->
 
 init([]) ->
     Pools = application:get_env(clickhouse, pools, []),
-    [ok = pooler:new_pool(P) || P <- Pools],
+    [{ok, _} = pooler:new_pool(P) || P <- Pools],
     {ok, {{one_for_one, 10, 100}, []}}.

@@ -30,7 +30,7 @@ eg:
       init_count => 2,
       max_count => 8,
       start_mfa => {clickhouse, start_link, #{url => "http://127.0.0.1:8123/?database=default",
-                                              url => "default",
+                                              user => "default",
                                               password => ""}}
      }
 ]}}
