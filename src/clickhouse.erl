@@ -94,6 +94,10 @@ handle_info(bulk_send, #{queries := Qs} = State) ->
     ?LOG_DEBUG("Clickhouse result for ~p - ~p",
                [Qs, Result]),
     {noreply, State#{queries => []}};
+handle_info(Msg, State) when is_tuple(Msg) andalso element(1, Msg) =:= gun_up ->
+    {noreply, State};
+handle_info(Msg, State) when is_tuple(Msg) andalso element(1, Msg) =:= gun_down ->
+    {noreply, State};
 handle_info(Info, State) ->
     ?LOG_DEBUG("Unknown message - ~p", [Info]),
     {noreply, State}.
