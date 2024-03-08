@@ -8,10 +8,6 @@ start_link() ->
     supervisor:start_link({local, ?MODULE}, ?MODULE, []).
 
 init([]) ->
-    PoolerSup = {pooler_sup,
-                 {pooler_sup, start_link, []},
-                 permanent,
-                 infinity,
-                 supervisor,
-                 [pooler_sup]},
-    {ok, {{one_for_one, 10, 100}, [PoolerSup]}}.
+    Pools = application:get_env(clickhouse, pools, []),
+    [ok = pooler:new_pool(P) || P <- Pools],
+    {ok, {{one_for_one, 10, 100}, []}}.

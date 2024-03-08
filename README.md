@@ -1,6 +1,45 @@
 # Erlang client library for ClickHouse
 
-Strart with
+## Configuration
+
+```erlang
+
+-type clickhouse_config() :: #{
+    url := list(), %% "http://{ip}:{port}/?database={db_name}"
+    user := list() | binary(),
+    password := list() | binary()
+  }.
+
+-type pool() :: #{
+    name := atom(),
+    init_count := integer(),
+    max_count := integer(),
+    start_mfa := {clickhouse, start_link, clickhouse_config()}
+}
+```
+
+In your sys.config add your pools
+
+```
+{clickhouse, {pools, [pool()|...]}}
+
+eg:
+
+{clickhouse, {pools, [
+    #{name => default,
+      init_count => 2,
+      max_count => 8,
+      start_mfa => {clickhouse, start_link, #{url => "http://127.0.0.1:8123/?database=default",
+                                              url => "default",
+                                              password => ""}}
+     }
+]}}
+
+```
+
+Alternatively manually start a pool
+
+Start with
 ```
 1> clickhouse:make_pool(default, #{ url => "http://127.0.0.1:8123/?database=default", user => "default", password => "" }, 2, 8).                     
 {ok,<0.273.0>}
@@ -22,3 +61,9 @@ Strart with
     <<"1\n">>}
 
 ```
+
+You can get an array of Maps as the response value if using
+```
+clickhouse:query(default, <<"SELECT * from table....">>, <<"JSONEachRow">>).
+```
+Only <<"JSONEachRow">> is currently supported and relies on the `euneus` JSON decoder
