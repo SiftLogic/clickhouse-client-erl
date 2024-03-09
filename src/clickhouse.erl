@@ -133,7 +133,7 @@ connect(State) ->
          end,
     Opts = case maps:get(scheme, URI, "") =:= "https" of
                true ->
-                   #{keepalive => 5000,
+                   #{http_opts => #{keepalive => 5000},
                      transport => tls,
                      tls_opts =>
                          [{versions, ['tlsv1.2', 'tlsv1.3']},
@@ -143,7 +143,7 @@ connect(State) ->
                              public_key:pkix_verify_hostname_match_fun(https)}]},
                           %%,
                           {log_level, info}]};
-               false -> #{keepalive => 5000}
+               false -> #{http_opts => #{keepalive => 5000}}
            end,
     Headers = [{<<"X-ClickHouse-User">>,
                 to_binary(maps:get(user, State, <<"default">>))},
