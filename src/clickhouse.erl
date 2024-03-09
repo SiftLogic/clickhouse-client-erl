@@ -131,7 +131,7 @@ connect(State) ->
                  end;
              ValidQS -> ValidQS
          end,
-    Opts = case lists:prefix("https", URI) of
+    Opts = case maps:get(scheme, URI, "") =:= "https" of
                true ->
                    #{protocols => [http, http2],
                      tls_opts =>
