@@ -24,18 +24,19 @@
 
 make_pool(PoolName, Params, Start, Max) ->
     pooler_sup:new_pool(#{name => PoolName,
-                         max_count => Max,
-                         init_count => Start,
-                         start_mfa => {clickhouse, start_link, [Params]}}).
+                          max_count => Max, init_count => Start,
+                          start_mfa => {clickhouse, start_link, [Params]}}).
 
 query(Pool, SQL) ->
     query(Pool, iolist_to_binary(SQL), <<>>).
 
-query(Pool, SQL, ReturnFormat) when not is_binary(SQL) ->
+query(Pool, SQL, ReturnFormat)
+    when not is_binary(SQL) ->
     query(Pool, iolist_to_binary(SQL), ReturnFormat);
 query(Pool, SQL, ReturnFormat) when is_binary(SQL) ->
     Pid = pooler:take_member(Pool),
-    Result = gen_server:call(Pid, {query, SQL, ReturnFormat}),
+    Result = gen_server:call(Pid,
+                             {query, SQL, ReturnFormat}),
     pooler:return_member(Pool, Pid, ok),
     Result.
 
@@ -55,8 +56,7 @@ start_link(Opts) ->
 init([Opts]) ->
     timer:send_after(0, connect),
     case maps:get(bulk_send_period, Opts, 0) of
-        0 ->
-            {ok, Opts#{bulk_timer => undefined}};
+        0 -> {ok, Opts#{bulk_timer => undefined}};
         N ->
             {ok, BulkTimer} = timer:send_interval(N * 1000,
                                                   bulk_send),
@@ -94,9 +94,12 @@ handle_info(bulk_send, #{queries := Qs} = State) ->
     ?LOG_DEBUG("Clickhouse result for ~p - ~p",
                [Qs, Result]),
     {noreply, State#{queries => []}};
-handle_info(Msg, State) when is_tuple(Msg) andalso element(1, Msg) =:= gun_up ->
+handle_info(Msg, State)
+    when is_tuple(Msg) andalso element(1, Msg) =:= gun_up ->
     {noreply, State};
-handle_info(Msg, State) when is_tuple(Msg) andalso element(1, Msg) =:= gun_down ->
+handle_info(Msg, State)
+    when is_tuple(Msg) andalso
+             element(1, Msg) =:= gun_down ->
     {noreply, State};
 handle_info(Info, State) ->
     ?LOG_DEBUG("Unknown message - ~p", [Info]),
@@ -128,16 +131,31 @@ connect(State) ->
                  end;
              ValidQS -> ValidQS
          end,
+    Opts = case lists:prefix("https", URI) of
+               true ->
+                   #{protocols => [http, http2],
+                     tls_opts =>
+                         [{versions, ['tlsv1.2', 'tlsv1.3']},
+                          {cacerts, public_key:cacerts_get()},
+                          {customize_hostname_check,
+                           [{match_fun,
+                             public_key:pkix_verify_hostname_match_fun(https)}]},
+                          %%,
+                          {log_level, info}]};
+               false -> #{protocols => [http, http2]}
+           end,
     Headers = [{<<"X-ClickHouse-User">>,
                 to_binary(maps:get(user, State, <<"default">>))},
                {<<"X-ClickHouse-Key">>,
                 to_binary(maps:get(password, State, <<"">>))}],
-    case gun:open(Host, Port) of
+    case gun:open(Host, Port, Opts) of
         {ok, Con} ->
             case gun:await_up(Con) of
                 {ok, _Protocol} ->
                     State#{con => Con, headers => Headers,
-                           f_path => Path ++ "?output_format_json_quote_64bit_integers=0&" ++ QS};
+                           f_path =>
+                               Path ++
+                                   "?output_format_json_quote_64bit_integers=0&" ++ QS};
                 AwaitError ->
                     ?LOG_ERROR("Can't await connection ~p up - ~p",
                                [URI, AwaitError]),
@@ -151,8 +169,7 @@ connect(State) ->
             State
     end.
 
-make_query(SQL, State) ->
-    make_query(SQL, <<>>, State).
+make_query(SQL, State) -> make_query(SQL, <<>>, State).
 
 make_query(SQL0, ReturnFormat,
            #{con := Con, headers := Headers, f_path := FPath}) ->
@@ -213,7 +230,10 @@ process_response(Con, StreamRef, Status, RespHeaders,
             {error, {Status, RespHeadersMap, Body}}
     end.
 
-process_body(<<"JSONEachRow">>, #{<<"x-clickhouse-format">> := <<"JSONEachRow">>} = _RespHeadersMap, Body) ->
+process_body(<<"JSONEachRow">>,
+             #{<<"x-clickhouse-format">> := <<"JSONEachRow">>} =
+                 _RespHeadersMap,
+             Body) ->
     to_json_array(Body, <<>>, []);
 process_body(_RespFormat, _RespHeadersMap, Body) ->
     Body.
@@ -228,13 +248,24 @@ to_list(L) -> L.
 to_binary(B) when is_binary(B) -> B;
 to_binary(B) when is_list(B) -> list_to_binary(B).
 
--define(DECODE_OPTS, #{null_term => null, plugins => [datetime, inet], values => fun(<<Yr:4/binary,"-", Mon:2/binary, "-", Day:2/binary>>, _Opts) -> {binary_to_integer(Yr), binary_to_integer(Mon), binary_to_integer(Day)}; (Val, _Opts) -> Val end}).
-to_json_array(<<>>, _, Terms) ->
-    lists:reverse(Terms);
+-define(DECODE_OPTS,
+        #{null_term => null, plugins => [datetime, inet],
+          values =>
+              fun (<<Yr:4/binary, "-", Mon:2/binary, "-",
+                     Day:2/binary>>,
+                   _Opts) ->
+                      {binary_to_integer(Yr),
+                       binary_to_integer(Mon),
+                       binary_to_integer(Day)};
+                  (Val, _Opts) -> Val
+              end}).
+
+to_json_array(<<>>, _, Terms) -> lists:reverse(Terms);
 to_json_array(<<"\\n", Body/binary>>, Term, Acc) ->
     to_json_array(Body, <<Term/binary, "\\n">>, Acc);
 to_json_array(<<"\n", Body/binary>>, Term, Acc) ->
     {ok, Json} = euneus:decode(Term, ?DECODE_OPTS),
     to_json_array(Body, <<>>, [Json | Acc]);
-to_json_array(<<Char:1/binary, Body/binary>>, Term, Acc) ->
+to_json_array(<<Char:1/binary, Body/binary>>, Term,
+              Acc) ->
     to_json_array(Body, <<Term/binary, Char/binary>>, Acc).
