@@ -133,8 +133,7 @@ connect(State) ->
          end,
     Opts = case maps:get(scheme, URI, "") =:= "https" of
                true ->
-                   #{protocols => [http, http2],
-                     tls_opts =>
+                   #{tls_opts =>
                          [{versions, ['tlsv1.2', 'tlsv1.3']},
                           {cacerts, public_key:cacerts_get()},
                           {customize_hostname_check,
@@ -142,7 +141,7 @@ connect(State) ->
                              public_key:pkix_verify_hostname_match_fun(https)}]},
                           %%,
                           {log_level, info}]};
-               false -> #{protocols => [http, http2]}
+               false -> #{}
            end,
     Headers = [{<<"X-ClickHouse-User">>,
                 to_binary(maps:get(user, State, <<"default">>))},
