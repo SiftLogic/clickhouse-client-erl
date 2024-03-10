@@ -5,6 +5,7 @@
 -export([make_pool/4,
          query/2,
          query/3,
+         json_insert/3,
          execute/2,
          start_link/1,
          init/1,
@@ -22,6 +23,31 @@
 
 -define(BODY_TIMEOUT, 60 * 1000). % 60 s
 
+-define(EUNEUS_DATE_ENCODE_PLUGIN,
+        fun ({Yr, Mon, Day}, _Opts) ->
+                io_lib:format("~4..0B-~2..0B-~2..0B", [Yr, Mon, Day]);
+            (Val, _Opts) -> Val
+        end).
+
+-define(EUNEUS_ENCODE_OPTS,
+        #{nulls => [null, undefined, nil],
+          plugins => [drop_nulls, datetime, inet],
+          unhandled_encoder => ?EUNEUS_DATE_ENCODE_PLUGIN}).
+
+-define(EUNEUS_DATE_DECODE_PLUGIN,
+        fun (<<Yr:4/binary, "-", Mon:2/binary, "-",
+               Day:2/binary>>,
+             _Opts) ->
+                {binary_to_integer(Yr),
+                 binary_to_integer(Mon),
+                 binary_to_integer(Day)};
+            (Val, _Opts) -> Val
+        end).
+
+-define(EUNEUS_DECODE_OPTS,
+        #{null_term => null, plugins => [datetime, inet],
+          unhandled_encoder => ?EUNEUS_DATE_DECODE_PLUGIN}).
+
 make_pool(PoolName, Params, Start, Max) ->
     pooler_sup:new_pool(#{name => PoolName,
                           max_count => Max, init_count => Start,
@@ -37,6 +63,17 @@ query(Pool, SQL, ReturnFormat) when is_binary(SQL) ->
     Pid = pooler:take_member(Pool),
     Result = gen_server:call(Pid,
                              {query, SQL, ReturnFormat}),
+    pooler:return_member(Pool, Pid, ok),
+    Result.
+
+json_insert(Pool, Table, Body) when is_atom(Table) ->
+    json_insert(Pool, atom_to_list(Table), Body);
+json_insert(Pool, Table, Body) when is_binary(Table) ->
+    json_insert(Pool, binary_to_list(Table), Body);
+json_insert(Pool, Table, Body) when is_list(Table) ->
+    Pid = pooler:take_member(Pool),
+    Result = gen_server:call(Pid,
+                             {json_insert, Table, Body}),
     pooler:return_member(Pool, Pid, ok),
     Result.
 
@@ -65,6 +102,8 @@ init([Opts]) ->
 
 handle_call({query, SQL, ReturnFormat}, _From, State) ->
     {reply, make_query(SQL, ReturnFormat, State), State};
+handle_call({json_insert, Table, Body}, _From, State) ->
+    {reply, make_json_insert(Table, Body, State), State};
 handle_call(_Request, _From, State) ->
     {reply, ignored, State}.
 
@@ -133,8 +172,7 @@ connect(State) ->
          end,
     Opts = case maps:get(scheme, URI, "") =:= "https" of
                true ->
-                   #{http_opts => #{keepalive => 5000},
-                     transport => tls,
+                   #{http_opts => #{keepalive => 5000}, transport => tls,
                      tls_opts =>
                          [{versions, ['tlsv1.2', 'tlsv1.3']},
                           {cacerts, public_key:cacerts_get()},
@@ -201,6 +239,48 @@ make_query(SQL0, ReturnFormat,
             {error, unknown_response}
     end.
 
+make_json_insert(Table, Body0,
+                 #{con := Con, headers := Headers, f_path := FPath}) ->
+    %%?LOG_DEBUG("Execute ~p", [SQL]),
+    Path = FPath ++
+               "&query=INSERT%20INTO%20" ++
+                   Table ++ "%20FORMAT%20JSONEachRow",
+    Body = case Body0 of
+               _ when is_binary(Body0) -> Body0;
+               _ when is_list(Body0) -> mk_body(Body0, <<>>)
+           end,
+    StreamRef = gun:post(Con, Path, Headers, Body),
+    case gun:await(Con, StreamRef, ?TIMEOUT) of
+        {response, fin, Status, RespHeaders} ->
+            process_response(Con,
+                             StreamRef,
+                             Status,
+                             RespHeaders,
+                             true,
+                             <<"JSONEachRow">>);
+        {response, nofin, Status, RespHeaders} ->
+            process_response(Con,
+                             StreamRef,
+                             Status,
+                             RespHeaders,
+                             false,
+                             <<"JSONEachRow">>);
+        Other ->
+            ?LOG_WARNING("Unknown clickhouse client response - ~p",
+                         [Other]),
+            {error, unknown_response}
+    end.
+
+mk_body([], Acc) -> Acc;
+mk_body([H | T], <<>>) ->
+    {ok, Enc} = euneus:encode_to_binary(H,
+                                        ?EUNEUS_ENCODE_OPTS),
+    mk_body(T, Enc);
+mk_body([H | T], Acc) ->
+    {ok, Enc} = euneus:encode_to_binary(H,
+                                        ?EUNEUS_ENCODE_OPTS),
+    mk_body(T, <<Acc/binary, "\n", Enc/binary>>).
+
 process_response(Con, StreamRef, Status, RespHeaders,
                  IsFin, ReturnFormat) ->
     RespHeadersMap = maps:from_list([{string:lowercase(K),
@@ -249,23 +329,11 @@ to_list(L) -> L.
 to_binary(B) when is_binary(B) -> B;
 to_binary(B) when is_list(B) -> list_to_binary(B).
 
--define(DECODE_OPTS,
-        #{null_term => null, plugins => [datetime, inet],
-          values =>
-              fun (<<Yr:4/binary, "-", Mon:2/binary, "-",
-                     Day:2/binary>>,
-                   _Opts) ->
-                      {binary_to_integer(Yr),
-                       binary_to_integer(Mon),
-                       binary_to_integer(Day)};
-                  (Val, _Opts) -> Val
-              end}).
-
 to_json_array(<<>>, _, Terms) -> lists:reverse(Terms);
 to_json_array(<<"\\n", Body/binary>>, Term, Acc) ->
     to_json_array(Body, <<Term/binary, "\\n">>, Acc);
 to_json_array(<<"\n", Body/binary>>, Term, Acc) ->
-    {ok, Json} = euneus:decode(Term, ?DECODE_OPTS),
+    {ok, Json} = euneus:decode(Term, ?EUNEUS_DECODE_OPTS),
     to_json_array(Body, <<>>, [Json | Acc]);
 to_json_array(<<Char:1/binary, Body/binary>>, Term,
               Acc) ->
