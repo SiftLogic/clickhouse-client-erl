@@ -5,8 +5,9 @@
 ```erlang
 
 -type clickhouse_config() :: #{
-    url := list(), %% "http://{ip}:{port}/?database={db_name}"
-    user := list() | binary(),
+    url := list(), %% "http://{ip}:{port}/"
+    database := list() | binary(),
+    username := list() | binary(),
     password := list() | binary()
   }.
 
@@ -29,7 +30,8 @@ eg:
     #{name => default,
       init_count => 2,
       max_count => 8,
-      start_mfa => {clickhouse, start_link, #{url => "http://127.0.0.1:8123/?database=default",
+      start_mfa => {clickhouse, start_link, #{url => "http://127.0.0.1:8123/",
+                                              database => "default"
                                               user => "default",
                                               password => ""}}
      }
@@ -41,7 +43,7 @@ Alternatively manually start a pool
 
 Start with
 ```
-1> clickhouse:make_pool(default, #{ url => "http://127.0.0.1:8123/?database=default", user => "default", password => "" }, 2, 8).                     
+1> clickhouse:make_pool(default, #{ url => "http://127.0.0.1:8123/", database => "default", username => "default", password => "" }, 2, 8).
 {ok,<0.273.0>}
 2> clickhouse:query(default, <<"SELECT 1;">>).
 {ok,#{<<"connection">> => <<"Keep-Alive">>,

@@ -6,11 +6,13 @@
          query/2,
          query/3,
          json_insert/3,
+         json_insert_async/3,
          execute/2,
          start_link/1,
          init/1,
          handle_call/3,
          handle_cast/2,
+         handle_continue/2,
          handle_info/2,
          terminate/2,
          code_change/3]).
@@ -22,6 +24,8 @@
 -define(TIMEOUT, 30 * 1000). % 30 s
 
 -define(BODY_TIMEOUT, 60 * 1000). % 60 s
+
+-define(BULK_SEND_INTERVAL, 60).
 
 -define(EUNEUS_DATE_ENCODE_PLUGIN,
         fun ({Yr, Mon, Day}, _Opts) ->
@@ -47,6 +51,18 @@
 -define(EUNEUS_DECODE_OPTS,
         #{null_term => null, plugins => [datetime, inet],
           unhandled_encoder => ?EUNEUS_DATE_DECODE_PLUGIN}).
+
+-record(state,
+        {url = "http://127.0.0.1:8123/",
+         database = "default",
+         username = <<"default">>,
+         password = <<>>,
+         con :: gun:connection(),
+         headers = [],
+         f_path :: list(),
+         bulk_timer = undefined,
+         queries = [],
+         json_inserts = #{}}).
 
 make_pool(PoolName, Params, Start, Max) ->
     pooler_sup:new_pool(#{name => PoolName,
@@ -77,6 +93,19 @@ json_insert(Pool, Table, Body) when is_list(Table) ->
     pooler:return_member(Pool, Pid, ok),
     Result.
 
+json_insert_async(Pool, Table, Body)
+    when is_atom(Table) ->
+    json_insert_async(Pool, atom_to_list(Table), Body);
+json_insert_async(Pool, Table, Body)
+    when is_binary(Table) ->
+    json_insert_async(Pool, binary_to_list(Table), Body);
+json_insert_async(Pool, Table, Body)
+    when is_list(Table) ->
+    Pid = pooler:take_member(Pool),
+    gen_server:cast(Pid, {json_insert, Table, Body}),
+    pooler:return_member(Pool, Pid, ok),
+    ok.
+
 execute(Pool, SQL) ->
     Pid = pooler:take_member(Pool),
     gen_server:cast(Pid, {query, SQL}),
@@ -86,19 +115,25 @@ execute(Pool, SQL) ->
 %
 % gen_server
 %
-
 start_link(Opts) ->
     gen_server:start_link(?MODULE, [Opts], []).
 
 init([Opts]) ->
-    timer:send_after(0, connect),
-    case maps:get(bulk_send_period, Opts, 0) of
-        0 -> {ok, Opts#{bulk_timer => undefined}};
-        N ->
-            {ok, BulkTimer} = timer:send_interval(N * 1000,
-                                                  bulk_send),
-            {ok, Opts#{bulk_timer => BulkTimer, queries => []}}
-    end.
+    BulkInterval = maps:get(bulk_send_period,
+                            Opts,
+                            ?BULK_SEND_INTERVAL),
+    Url = maps:get(url, Opts, <<"http://localhost:8123/">>),
+    Database = maps:get(database, Opts, <<"default">>),
+    Username = maps:get(username, Opts, <<"default">>),
+    Password = maps:get(password, Opts, <<>>),
+    {ok, BulkTimer} = timer:send_interval(BulkInterval *
+                                              1000,
+                                          bulk_send),
+    {ok,
+     #state{url = Url, database = Database,
+            username = Username, password = Password,
+            bulk_timer = BulkTimer},
+     {continue, connect}}.
 
 handle_call({query, SQL, ReturnFormat}, _From, State) ->
     {reply, make_query(SQL, ReturnFormat, State), State};
@@ -108,31 +143,65 @@ handle_call(_Request, _From, State) ->
     {reply, ignored, State}.
 
 handle_cast({query, SQL, _},
-            #{bulk_timer := undefined} = State) ->
+            #state{bulk_timer = undefined} = State) ->
     Result = make_query(SQL, State),
     ?LOG_DEBUG("Clickhouse result for ~p - ~p",
                [SQL, Result]),
     {noreply, State};
-handle_cast({query, SQL}, #{queries := Qs} = State) ->
-    {noreply, State#{queries => Qs ++ [SQL]}};
+handle_cast({query, SQL},
+            #state{queries = Qs} = State) ->
+    {noreply,
+     State#state{queries = lists:append(Qs, [SQL])}};
+handle_cast({json_insert, Table, Body},
+            #state{json_inserts = JsonInserts} = State)
+    when is_map_key(Table, JsonInserts) ->
+    Rows = [Body | maps:get(Table, JsonInserts)],
+    case map_size(Rows) > 100 of
+        true ->
+            NState = State#state{json_inserts =
+                                     JsonInserts#{Table => []}},
+            Result = make_json_insert(Table, Rows, NState),
+            ?LOG_DEBUG("Clickhouse result for ~p - ~p",
+                       [Rows, Result]),
+            {noreply, NState};
+        false ->
+            NJsonInserts = JsonInserts#{Table => Rows},
+            {noreply, State#state{json_inserts = NJsonInserts}}
+    end;
+handle_cast({json_insert, Table, Body},
+            #state{json_inserts = JsonInserts} = State) ->
+    NJsonInserts = JsonInserts#{Table := [Body]},
+    {noreply, State#state{json_inserts = NJsonInserts}};
 handle_cast(_Msg, State) -> {noreply, State}.
+
+handle_continue(connect, State) ->
+    {noreply, connect(State)}.
 
 handle_info(connect, State) ->
     {noreply, connect(State)};
 handle_info({gun_error, Con, _StreamRef, Error},
-            #{con := Con} = State) ->
+            #state{con = Con} = State) ->
     ?LOG_ERROR("Clickhouse client error - ~p", [Error]),
     gun:shutdown(Con),
     timer:send_after(?CONNECTION_TIMEOUT, connect),
+    {noreply, State#state{con = undefined}};
+handle_info(bulk_send, #state{queries = []} = State) ->
     {noreply, State};
-handle_info(bulk_send, #{queries := []} = State) ->
-    {noreply, State};
-handle_info(bulk_send, #{queries := Qs} = State) ->
-    Result = lists:map(fun (Q) -> make_query(Q, State) end,
-                       Qs),
+handle_info(bulk_send,
+            #state{queries = Qs, json_inserts = JsonInserts} =
+                State) ->
+    QResult = lists:map(fun (Q) -> make_query(Q, State) end,
+                        Qs),
     ?LOG_DEBUG("Clickhouse result for ~p - ~p",
-               [Qs, Result]),
-    {noreply, State#{queries => []}};
+               [Qs, QResult]),
+    JResult = lists:map(fun ({Table, Rows}) ->
+                                make_json_insert(Table, Rows, State)
+                        end,
+                        maps:to_list(JsonInserts)),
+    ?LOG_DEBUG("Clickhouse json result for ~p - ~p",
+               [JsonInserts, JResult]),
+    {noreply,
+     State#state{queries = [], json_inserts = #{}}};
 handle_info(Msg, State)
     when is_tuple(Msg) andalso element(1, Msg) =:= gun_up ->
     {noreply, State};
@@ -144,7 +213,8 @@ handle_info(Info, State) ->
     ?LOG_DEBUG("Unknown message - ~p", [Info]),
     {noreply, State}.
 
-terminate(_Reason, #{con := Con}) when is_pid(Con) ->
+terminate(_Reason, #state{con = Con})
+    when is_pid(Con) ->
     gun:shutdown(Con),
     ok;
 terminate(_Reason, _State) -> ok.
@@ -155,21 +225,15 @@ code_change(_OldVsn, State, _Extra) -> {ok, State}.
 % local
 %
 
-connect(State) ->
-    URI = uri_string:parse(to_list(maps:get(url,
-                                            State,
-                                            "http://127.0.0.1:8123"))),
+connect(#state{url = Url, database = Db,
+               username = Username, password = Password} =
+            State) ->
+    URI = uri_string:parse(Url),
     Host = to_list(maps:get(host, URI, "127.0.0.1")),
     Port = maps:get(port, URI, 8123),
     Path = to_list(maps:get(path, URI, "/")),
-    QS = case maps:get(query, URI, undefined) of
-             undefined ->
-                 case maps:get(database, State, undefined) of
-                     undefined -> "";
-                     DB -> "database=" ++ to_list(DB)
-                 end;
-             ValidQS -> ValidQS
-         end,
+    QS = maps:get(query, URI, "") ++
+             "database=" ++ to_list(Db),
     Opts = case maps:get(scheme, URI, "") =:= "https" of
                true ->
                    #{http_opts => #{keepalive => 5000}, transport => tls,
@@ -184,17 +248,16 @@ connect(State) ->
                false -> #{http_opts => #{keepalive => 5000}}
            end,
     Headers = [{<<"X-ClickHouse-User">>,
-                to_binary(maps:get(user, State, <<"default">>))},
-               {<<"X-ClickHouse-Key">>,
-                to_binary(maps:get(password, State, <<"">>))}],
+                to_binary(Username)},
+               {<<"X-ClickHouse-Key">>, to_binary(Password)}],
     case gun:open(Host, Port, Opts) of
         {ok, Con} ->
             case gun:await_up(Con) of
                 {ok, _Protocol} ->
-                    State#{con => Con, headers => Headers,
-                           f_path =>
-                               Path ++
-                                   "?output_format_json_quote_64bit_integers=0&" ++ QS};
+                    State#state{con = Con, headers = Headers,
+                                f_path =
+                                    Path ++
+                                        "?output_format_json_quote_64bit_integers=0&" ++ QS};
                 AwaitError ->
                     ?LOG_ERROR("Can't await connection ~p up - ~p",
                                [URI, AwaitError]),
@@ -210,8 +273,11 @@ connect(State) ->
 
 make_query(SQL, State) -> make_query(SQL, <<>>, State).
 
+make_query(SQL, ReturnFormat, State)
+    when not is_binary(SQL) ->
+    make_query(iolist_to_binary(SQL), ReturnFormat, State);
 make_query(SQL0, ReturnFormat,
-           #{con := Con, headers := Headers, f_path := FPath}) ->
+           #state{con = Con, headers = Headers, f_path = FPath}) ->
     SQL = case ReturnFormat of
               <<>> -> SQL0;
               _ -> <<SQL0/binary, " FORMAT ", ReturnFormat/binary>>
@@ -240,7 +306,7 @@ make_query(SQL0, ReturnFormat,
     end.
 
 make_json_insert(Table, Body0,
-                 #{con := Con, headers := Headers, f_path := FPath}) ->
+                 #state{con = Con, headers = Headers, f_path = FPath}) ->
     %%?LOG_DEBUG("Execute ~p", [SQL]),
     Path = FPath ++
                "&query=INSERT%20INTO%20" ++
@@ -266,8 +332,8 @@ make_json_insert(Table, Body0,
                              false,
                              <<"JSONEachRow">>);
         Other ->
-            ?LOG_WARNING("Unknown clickhouse client response - ~p",
-                         [Other]),
+            ?LOG_ERROR("Unknown clickhouse client response - ~p",
+                       [Other]),
             {error, unknown_response}
     end.
 
@@ -306,7 +372,7 @@ process_response(Con, StreamRef, Status, RespHeaders,
                        {ok, B} -> B;
                        _Any -> <<>>
                    end,
-            ?LOG_DEBUG("Clickhouse client return ~p (~p) ~p",
+            ?LOG_ERROR("Clickhouse client return ~p (~p) ~p",
                        [Status, RespHeaders, Body]),
             {error, {Status, RespHeadersMap, Body}}
     end.
