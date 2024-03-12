@@ -330,7 +330,8 @@ make_json_insert(Table, Body0,
                    Table ++ "%20FORMAT%20JSONEachRow",
     Body = case Body0 of
                _ when is_binary(Body0) -> Body0;
-               _ when is_list(Body0) -> mk_body(Body0, <<>>)
+               _ when is_list(Body0) -> mk_body(Body0, <<>>);
+               _ when is_map(Body0) -> mk_body([Body0], <<>>)
            end,
     StreamRef = gun:post(Con, Path, Headers, Body),
     case gun:await(Con, StreamRef, ?TIMEOUT) of
