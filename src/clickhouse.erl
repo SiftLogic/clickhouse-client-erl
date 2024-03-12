@@ -286,19 +286,33 @@ make_query(SQL0, ReturnFormat,
     StreamRef = gun:post(Con, FPath, Headers, SQL),
     case gun:await(Con, StreamRef, ?TIMEOUT) of
         {response, fin, Status, RespHeaders} ->
-            process_response(Con,
+            case process_response(Con,
                              StreamRef,
                              Status,
                              RespHeaders,
                              true,
-                             ReturnFormat);
+                             ReturnFormat) of
+                                {error, _} = Err ->
+                                    ?LOG_ERROR("Clickhouse client error - ~p ~p ~p ~p",
+                                               [Err, FPath, Headers, SQL]),
+                                    Err;
+                                Resp ->
+                                    Resp
+                                end;
         {response, nofin, Status, RespHeaders} ->
-            process_response(Con,
+            case process_response(Con,
                              StreamRef,
                              Status,
                              RespHeaders,
                              false,
-                             ReturnFormat);
+                             ReturnFormat) of
+                                {error, _} = Err ->
+                                    ?LOG_ERROR("Clickhouse client error - ~p ~p ~p ~p",
+                                               [Err, FPath, Headers, SQL]),
+                                    Err;
+                                Resp ->
+                                    Resp
+                                end;
         Other ->
             ?LOG_WARNING("Unknown clickhouse client response - ~p",
                          [Other]),
@@ -318,19 +332,33 @@ make_json_insert(Table, Body0,
     StreamRef = gun:post(Con, Path, Headers, Body),
     case gun:await(Con, StreamRef, ?TIMEOUT) of
         {response, fin, Status, RespHeaders} ->
-            process_response(Con,
+            case process_response(Con,
                              StreamRef,
                              Status,
                              RespHeaders,
                              true,
-                             <<"JSONEachRow">>);
+                             <<"JSONEachRow">>) of
+                                {error, _} = Err ->
+                                    ?LOG_ERROR("Clickhouse client error - ~p ~p ~p ~p",
+                                               [Err, Path, Headers, Body]),
+                                    Err;
+                                Resp ->
+                                    Resp
+                                end;
         {response, nofin, Status, RespHeaders} ->
-            process_response(Con,
+            case process_response(Con,
                              StreamRef,
                              Status,
                              RespHeaders,
                              false,
-                             <<"JSONEachRow">>);
+                             <<"JSONEachRow">>) of
+                                {error, _} = Err ->
+                                    ?LOG_ERROR("Clickhouse client error - ~p ~p ~p ~p",
+                                               [Err, Path, Headers, Body]),
+                                    Err;
+                                Resp ->
+                                    Resp
+                                end;
         Other ->
             ?LOG_ERROR("Unknown clickhouse client response - ~p",
                        [Other]),
@@ -361,7 +389,7 @@ process_response(Con, StreamRef, Status, RespHeaders,
                      RespHeadersMap,
                      process_body(ReturnFormat, RespHeadersMap, Body)};
                 Error ->
-                    ?LOG_ERROR("Can't load body - ~p", [Error]),
+                    %% ?LOG_ERROR("Can't load body - ~p", [Error]),
                     {error, Error}
             end;
         false ->
@@ -372,8 +400,8 @@ process_response(Con, StreamRef, Status, RespHeaders,
                        {ok, B} -> B;
                        _Any -> <<>>
                    end,
-            ?LOG_ERROR("Clickhouse client return ~p (~p) ~p",
-                       [Status, RespHeaders, Body]),
+            % ?LOG_ERROR("Clickhouse client return ~p (~p) ~p",
+            %            [Status, RespHeaders, Body]),
             {error, {Status, RespHeadersMap, Body}}
     end.
 
