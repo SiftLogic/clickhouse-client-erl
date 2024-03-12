@@ -30,12 +30,15 @@
 -define(EUNEUS_DATE_ENCODE_PLUGIN,
         fun ({Yr, Mon, Day}, _Opts) ->
                 io_lib:format("~4..0B-~2..0B-~2..0B", [Yr, Mon, Day]);
+            ({{Yr, Mon, Day}, {Hr, Min, Sec}}, _Opts) ->
+                io_lib:format("~4..0B-~2..0B-~2..0B ~2..0B:~2..0B:~2..0B",
+                              [Yr, Mon, Day, Hr, Min, round(Sec)]);
             (Val, _Opts) -> Val
         end).
 
 -define(EUNEUS_ENCODE_OPTS,
         #{nulls => [null, undefined, nil],
-          plugins => [drop_nulls, datetime, inet],
+          plugins => [drop_nulls, inet],
           unhandled_encoder => ?EUNEUS_DATE_ENCODE_PLUGIN}).
 
 -define(EUNEUS_DATE_DECODE_PLUGIN,
@@ -287,32 +290,32 @@ make_query(SQL0, ReturnFormat,
     case gun:await(Con, StreamRef, ?TIMEOUT) of
         {response, fin, Status, RespHeaders} ->
             case process_response(Con,
-                             StreamRef,
-                             Status,
-                             RespHeaders,
-                             true,
-                             ReturnFormat) of
-                                {error, _} = Err ->
-                                    ?LOG_ERROR("Clickhouse client error - ~p ~p ~p ~p",
-                                               [Err, FPath, Headers, SQL]),
-                                    Err;
-                                Resp ->
-                                    Resp
-                                end;
+                                  StreamRef,
+                                  Status,
+                                  RespHeaders,
+                                  true,
+                                  ReturnFormat)
+                of
+                {error, _} = Err ->
+                    ?LOG_ERROR("Clickhouse client error - ~p ~p ~p ~p",
+                               [Err, FPath, Headers, SQL]),
+                    Err;
+                Resp -> Resp
+            end;
         {response, nofin, Status, RespHeaders} ->
             case process_response(Con,
-                             StreamRef,
-                             Status,
-                             RespHeaders,
-                             false,
-                             ReturnFormat) of
-                                {error, _} = Err ->
-                                    ?LOG_ERROR("Clickhouse client error - ~p ~p ~p ~p",
-                                               [Err, FPath, Headers, SQL]),
-                                    Err;
-                                Resp ->
-                                    Resp
-                                end;
+                                  StreamRef,
+                                  Status,
+                                  RespHeaders,
+                                  false,
+                                  ReturnFormat)
+                of
+                {error, _} = Err ->
+                    ?LOG_ERROR("Clickhouse client error - ~p ~p ~p ~p",
+                               [Err, FPath, Headers, SQL]),
+                    Err;
+                Resp -> Resp
+            end;
         Other ->
             ?LOG_WARNING("Unknown clickhouse client response - ~p",
                          [Other]),
@@ -333,32 +336,32 @@ make_json_insert(Table, Body0,
     case gun:await(Con, StreamRef, ?TIMEOUT) of
         {response, fin, Status, RespHeaders} ->
             case process_response(Con,
-                             StreamRef,
-                             Status,
-                             RespHeaders,
-                             true,
-                             <<"JSONEachRow">>) of
-                                {error, _} = Err ->
-                                    ?LOG_ERROR("Clickhouse client error - ~p ~p ~p ~p",
-                                               [Err, Path, Headers, Body]),
-                                    Err;
-                                Resp ->
-                                    Resp
-                                end;
+                                  StreamRef,
+                                  Status,
+                                  RespHeaders,
+                                  true,
+                                  <<"JSONEachRow">>)
+                of
+                {error, _} = Err ->
+                    ?LOG_ERROR("Clickhouse client error - ~p ~p ~p ~p",
+                               [Err, Path, Headers, Body]),
+                    Err;
+                Resp -> Resp
+            end;
         {response, nofin, Status, RespHeaders} ->
             case process_response(Con,
-                             StreamRef,
-                             Status,
-                             RespHeaders,
-                             false,
-                             <<"JSONEachRow">>) of
-                                {error, _} = Err ->
-                                    ?LOG_ERROR("Clickhouse client error - ~p ~p ~p ~p",
-                                               [Err, Path, Headers, Body]),
-                                    Err;
-                                Resp ->
-                                    Resp
-                                end;
+                                  StreamRef,
+                                  Status,
+                                  RespHeaders,
+                                  false,
+                                  <<"JSONEachRow">>)
+                of
+                {error, _} = Err ->
+                    ?LOG_ERROR("Clickhouse client error - ~p ~p ~p ~p",
+                               [Err, Path, Headers, Body]),
+                    Err;
+                Resp -> Resp
+            end;
         Other ->
             ?LOG_ERROR("Unknown clickhouse client response - ~p",
                        [Other]),
