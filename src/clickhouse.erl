@@ -29,9 +29,9 @@
 
 -define(EUNEUS_DATE_ENCODE_PLUGIN,
         fun ({Yr, Mon, Day}, _Opts) ->
-                io_lib:format("~4..0B-~2..0B-~2..0B", [Yr, Mon, Day]);
+                io_lib:format("\"~4..0B-~2..0B-~2..0B\"", [Yr, Mon, Day]);
             ({{Yr, Mon, Day}, {Hr, Min, Sec}}, _Opts) ->
-                io_lib:format("~4..0B-~2..0B-~2..0B ~2..0B:~2..0B:~2..0B",
+                io_lib:format("\"~4..0B-~2..0B-~2..0B ~2..0B:~2..0B:~2..0B\"",
                               [Yr, Mon, Day, Hr, Min, round(Sec)]);
             (Val, _Opts) -> Val
         end).
