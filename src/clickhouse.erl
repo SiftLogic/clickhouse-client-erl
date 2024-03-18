@@ -67,21 +67,24 @@
          queries = [],
          json_inserts = #{}}).
 
+-type query_opts() :: #{return_headers => boolean()}.
+
 make_pool(PoolName, Params, Start, Max) ->
     pooler_sup:new_pool(#{name => PoolName,
                           max_count => Max, init_count => Start,
                           start_mfa => {clickhouse, start_link, [Params]}}).
 
 query(Pool, SQL) ->
-    query(Pool, iolist_to_binary(SQL), <<>>).
+    query(Pool, iolist_to_binary(SQL), #{return_headers => true, return_format => <<>>}).
 
-query(Pool, SQL, ReturnFormat)
+-spec query(Pool :: atom(), SQL :: binary(), query_opts()) -> {ok, map(), any()} | {ok, any()} | {error, any()}.
+query(Pool, SQL, Opts)
     when not is_binary(SQL) ->
-    query(Pool, iolist_to_binary(SQL), ReturnFormat);
-query(Pool, SQL, ReturnFormat) when is_binary(SQL) ->
+    query(Pool, iolist_to_binary(SQL), Opts);
+query(Pool, SQL, Opts) when is_binary(SQL) andalso is_map(Opts) ->
     Pid = pooler:take_member(Pool),
     Result = gen_server:call(Pid,
-                             {query, SQL, ReturnFormat}),
+                             {query, SQL, Opts}),
     pooler:return_member(Pool, Pid, ok),
     Result.
 
@@ -138,8 +141,8 @@ init([Opts]) ->
             bulk_timer = BulkTimer},
      {continue, connect}}.
 
-handle_call({query, SQL, ReturnFormat}, _From, State) ->
-    {reply, make_query(SQL, ReturnFormat, State), State};
+handle_call({query, SQL, Opts}, _From, State) ->
+    {reply, make_query(SQL, Opts, State), State};
 handle_call({json_insert, Table, Body}, _From, State) ->
     {reply, make_json_insert(Table, Body, State), State};
 handle_call(_Request, _From, State) ->
@@ -274,16 +277,16 @@ connect(#state{url = Url, database = Db,
             State
     end.
 
-make_query(SQL, State) -> make_query(SQL, <<>>, State).
+make_query(SQL, State) -> make_query(SQL, #{return_headers => true}, State).
 
-make_query(SQL, ReturnFormat, State)
+make_query(SQL, Opts, State)
     when not is_binary(SQL) ->
-    make_query(iolist_to_binary(SQL), ReturnFormat, State);
-make_query(SQL0, ReturnFormat,
+    make_query(iolist_to_binary(SQL), Opts, State);
+make_query(SQL0, Opts,
            #state{con = Con, headers = Headers, f_path = FPath}) ->
-    SQL = case ReturnFormat of
+    SQL = case maps:get(return_format, Opts, <<>>) of
               <<>> -> SQL0;
-              _ -> <<SQL0/binary, " FORMAT ", ReturnFormat/binary>>
+              ReturnFormat -> <<SQL0/binary, " FORMAT ", ReturnFormat/binary>>
           end,
     ?LOG_DEBUG("Execute ~p", [SQL]),
     StreamRef = gun:post(Con, FPath, Headers, SQL),
@@ -294,7 +297,7 @@ make_query(SQL0, ReturnFormat,
                                   Status,
                                   RespHeaders,
                                   true,
-                                  ReturnFormat)
+                                  Opts)
                 of
                 {error, _} = Err ->
                     ?LOG_ERROR("Clickhouse client error - ~p ~p ~p ~p",
@@ -308,7 +311,7 @@ make_query(SQL0, ReturnFormat,
                                   Status,
                                   RespHeaders,
                                   false,
-                                  ReturnFormat)
+                                  Opts)
                 of
                 {error, _} = Err ->
                     ?LOG_ERROR("Clickhouse client error - ~p ~p ~p ~p",
@@ -341,7 +344,7 @@ make_json_insert(Table, Body0,
                                   Status,
                                   RespHeaders,
                                   true,
-                                  <<"JSONEachRow">>)
+                                  #{return_format => <<"JSONEachRow">>})
                 of
                 {error, _} = Err ->
                     ?LOG_ERROR("Clickhouse client error - ~p ~p ~p ~p",
@@ -355,7 +358,7 @@ make_json_insert(Table, Body0,
                                   Status,
                                   RespHeaders,
                                   false,
-                                  <<"JSONEachRow">>)
+                                  #{return_format => <<"JSONEachRow">>})
                 of
                 {error, _} = Err ->
                     ?LOG_ERROR("Clickhouse client error - ~p ~p ~p ~p",
@@ -380,7 +383,9 @@ mk_body([H | T], Acc) ->
     mk_body(T, <<Acc/binary, "\n", Enc/binary>>).
 
 process_response(Con, StreamRef, Status, RespHeaders,
-                 IsFin, ReturnFormat) ->
+                 IsFin, Opts) ->
+    ReturnFormat = maps:get(return_format, Opts, <<>>),
+    ReturnHeaders = maps:get(return_headers, Opts, false),
     RespHeadersMap = maps:from_list([{string:lowercase(K),
                                       V}
                                      || {K, V} <- RespHeaders]),
@@ -388,10 +393,13 @@ process_response(Con, StreamRef, Status, RespHeaders,
         true when IsFin -> ok;
         true ->
             case gun:await_body(Con, StreamRef, ?BODY_TIMEOUT) of
-                {ok, Body} ->
+                {ok, Body} when ReturnHeaders ->
                     {ok,
                      RespHeadersMap,
                      process_body(ReturnFormat, RespHeadersMap, Body)};
+                    {ok, Body} when not ReturnHeaders ->
+                        {ok,
+                         process_body(ReturnFormat, RespHeadersMap, Body)};
                 Error ->
                     %% ?LOG_ERROR("Can't load body - ~p", [Error]),
                     {error, Error}
