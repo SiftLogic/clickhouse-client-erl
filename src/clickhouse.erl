@@ -67,7 +67,8 @@
          queries = [],
          json_inserts = #{}}).
 
--type query_opts() :: #{return_headers => boolean()}.
+-type query_opts() :: #{return_headers => boolean(),
+                        return_format => binary()}.
 
 make_pool(PoolName, Params, Start, Max) ->
     pooler_sup:new_pool(#{name => PoolName,
@@ -286,7 +287,10 @@ make_query(SQL0, Opts,
            #state{con = Con, headers = Headers, f_path = FPath}) ->
     SQL = case maps:get(return_format, Opts, <<>>) of
               <<>> -> SQL0;
-              ReturnFormat -> <<SQL0/binary, " FORMAT ", ReturnFormat/binary>>
+              ReturnFormat when is_binary(ReturnFormat) -> <<SQL0/binary, " FORMAT ", ReturnFormat/binary>>;
+            ReturnFormat ->
+                ?LOG_ERROR("Unknown return format ~p", [ReturnFormat]),
+                SQL0
           end,
     ?LOG_DEBUG("Execute ~p", [SQL]),
     StreamRef = gun:post(Con, FPath, Headers, SQL),
