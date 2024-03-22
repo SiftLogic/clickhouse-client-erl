@@ -85,7 +85,7 @@ query(Pool, SQL, Opts)
 query(Pool, SQL, Opts) when is_binary(SQL) andalso is_map(Opts) ->
     case pooler:take_member(Pool) of
         error_no_members ->
-            ?LOG_ERROR("No members in pool ~p", [Pool]),
+            %% ?LOG_ERROR("No members in pool ~p", [Pool]),
             query(Pool, SQL, Opts);
         Pid ->
             Result = gen_server:call(Pid,
@@ -101,7 +101,7 @@ json_insert(Pool, Table, Body) when is_binary(Table) ->
 json_insert(Pool, Table, Body) when is_list(Table) ->
     case pooler:take_member(Pool) of
         error_no_members ->
-            ?LOG_ERROR("No members in pool ~p", [Pool]),
+            %% ?LOG_ERROR("No members in pool ~p", [Pool]),
             json_insert(Pool, Table, Body);
         Pid ->
             Result = gen_server:call(Pid,
@@ -120,7 +120,7 @@ json_insert_async(Pool, Table, Body)
     when is_list(Table) ->
     case pooler:take_member(Pool) of
         error_no_members ->
-            ?LOG_ERROR("No members in pool ~p", [Pool]),
+            %% ?LOG_ERROR("No members in pool ~p", [Pool]),
             json_insert_async(Pool, Table, Body);
         Pid ->
             gen_server:cast(Pid, {json_insert, Table, Body}),
@@ -131,7 +131,7 @@ json_insert_async(Pool, Table, Body)
 execute(Pool, SQL) ->
     case pooler:take_member(Pool) of
         error_no_members ->
-            ?LOG_ERROR("No members in pool ~p", [Pool]),
+            %% ?LOG_ERROR("No members in pool ~p", [Pool]),
             execute(Pool, SQL);
         Pid ->
             gen_server:cast(Pid, {query, SQL}),

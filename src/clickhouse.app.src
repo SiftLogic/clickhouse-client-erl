@@ -1,6 +1,6 @@
 {application,clickhouse,
              [{description,"ClickHouse Client"},
-              {vsn,"git"},
+              {vsn,"0.1.0"},
               {modules,[]},
               {registered,[clickhouse_sup]},
               {applications,[kernel, stdlib, inets, asn1, ssl, public_key, crypto, gun, pooler, euneus]},
