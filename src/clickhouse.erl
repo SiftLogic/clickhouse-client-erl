@@ -107,7 +107,12 @@ json_insert(Pool, Table, Body) when is_list(Table) ->
             Result = gen_server:call(Pid,
                                      {json_insert, Table, Body}),
             pooler:return_member(Pool, Pid, ok),
-            Result
+            case Result of
+                {error, retry} ->
+                    json_insert(Pool, Table, Body);
+                Result ->
+                    Result
+            end
     end.
 
 json_insert_async(Pool, Table, Body)
@@ -384,6 +389,10 @@ make_json_insert(Table, Body0,
                                   false,
                                   #{return_format => <<"JSONEachRow">>})
                 of
+                {error,{503,_Msg,_}} = Err ->
+                    ?LOG_ERROR("Clickhouse client error - ~p ~p ~p ~p",
+                               [Err, Path, Headers, Body]),
+                    {error, retry};
                 {error, _} = Err ->
                     ?LOG_ERROR("Clickhouse client error - ~p ~p ~p ~p",
                                [Err, Path, Headers, Body]),
