@@ -29,7 +29,8 @@
 
 -define(EUNEUS_DATE_ENCODE_PLUGIN,
         fun ({Yr, Mon, Day}, _Opts) ->
-                io_lib:format("\"~4..0B-~2..0B-~2..0B\"", [Yr, Mon, Day]);
+                io_lib:format("\"~4..0B-~2..0B-~2..0B\"",
+                              [Yr, Mon, Day]);
             ({{Yr, Mon, Day}, {Hr, Min, Sec}}, _Opts) ->
                 io_lib:format("\"~4..0B-~2..0B-~2..0B ~2..0B:~2..0B:~2..0B\"",
                               [Yr, Mon, Day, Hr, Min, round(Sec)]);
@@ -76,20 +77,25 @@ make_pool(PoolName, Params, Start, Max) ->
                           start_mfa => {clickhouse, start_link, [Params]}}).
 
 query(Pool, SQL) ->
-    query(Pool, iolist_to_binary(SQL), #{return_headers => true, return_format => <<>>}).
+    query(Pool,
+          iolist_to_binary(SQL),
+          #{return_headers => true, return_format => <<>>}).
 
--spec query(Pool :: atom(), SQL :: binary(), query_opts()) -> {ok, map(), any()} | {ok, any()} | {error, any()}.
-query(Pool, SQL, Opts)
-    when not is_binary(SQL) ->
+-spec query(Pool :: atom(), SQL :: binary(),
+            query_opts()) -> {ok, map(), any()} |
+                             {ok, any()} |
+                             {error, any()}.
+
+query(Pool, SQL, Opts) when not is_binary(SQL) ->
     query(Pool, iolist_to_binary(SQL), Opts);
-query(Pool, SQL, Opts) when is_binary(SQL) andalso is_map(Opts) ->
+query(Pool, SQL, Opts)
+    when is_binary(SQL) andalso is_map(Opts) ->
     case pooler:take_member(Pool) of
         error_no_members ->
             %% ?LOG_ERROR("No members in pool ~p", [Pool]),
             query(Pool, SQL, Opts);
         Pid ->
-            Result = gen_server:call(Pid,
-                                    {query, SQL, Opts}),
+            Result = gen_server:call(Pid, {query, SQL, Opts}),
             pooler:return_member(Pool, Pid, ok),
             Result
     end.
@@ -311,19 +317,20 @@ connect(#state{url = Url, database = Db,
             State
     end.
 
-make_query(SQL, State) -> make_query(SQL, #{return_headers => true}, State).
+make_query(SQL, State) ->
+    make_query(SQL, #{return_headers => true}, State).
 
-make_query(SQL, Opts, State)
-    when not is_binary(SQL) ->
+make_query(SQL, Opts, State) when not is_binary(SQL) ->
     make_query(iolist_to_binary(SQL), Opts, State);
 make_query(SQL0, Opts,
            #state{con = Con, headers = Headers, f_path = FPath}) ->
     SQL = case maps:get(return_format, Opts, <<>>) of
               <<>> -> SQL0;
-              ReturnFormat when is_binary(ReturnFormat) -> <<SQL0/binary, " FORMAT ", ReturnFormat/binary>>;
-            ReturnFormat ->
-                ?LOG_ERROR("Unknown return format ~p", [ReturnFormat]),
-                SQL0
+              ReturnFormat when is_binary(ReturnFormat) ->
+                  <<SQL0/binary, " FORMAT ", ReturnFormat/binary>>;
+              ReturnFormat ->
+                  ?LOG_ERROR("Unknown return format ~p", [ReturnFormat]),
+                  SQL0
           end,
     ?LOG_DEBUG("Execute ~p", [SQL]),
     StreamRef = gun:post(Con, FPath, Headers, SQL),
@@ -397,7 +404,7 @@ make_json_insert(Table, Body0,
                                   false,
                                   #{return_format => <<"JSONEachRow">>})
                 of
-                {error,{503,_Msg,_}} = Err ->
+                {error, {503, _Msg, _}} = Err ->
                     ?LOG_ERROR("Clickhouse client error - ~p ~p ~p ~p",
                                [Err, Path, Headers, Body]),
                     {error, retry};
@@ -438,9 +445,8 @@ process_response(Con, StreamRef, Status, RespHeaders,
                     {ok,
                      RespHeadersMap,
                      process_body(ReturnFormat, RespHeadersMap, Body)};
-                    {ok, Body} when not ReturnHeaders ->
-                        {ok,
-                         process_body(ReturnFormat, RespHeadersMap, Body)};
+                {ok, Body} when not ReturnHeaders ->
+                    {ok, process_body(ReturnFormat, RespHeadersMap, Body)};
                 Error ->
                     %% ?LOG_ERROR("Can't load body - ~p", [Error]),
                     {error, Error}
