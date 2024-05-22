@@ -104,14 +104,22 @@ json_insert(Pool, Table, Body) when is_list(Table) ->
             %% ?LOG_ERROR("No members in pool ~p", [Pool]),
             json_insert(Pool, Table, Body);
         Pid ->
-            Result = gen_server:call(Pid,
-                                     {json_insert, Table, Body}),
-            pooler:return_member(Pool, Pid, ok),
-            case Result of
-                {error, retry} ->
-                    json_insert(Pool, Table, Body);
+            try gen_server:call(Pid,
+                                {json_insert, Table, Body},
+                                timer:minutes(5))
+            of
                 Result ->
-                    Result
+                    pooler:return_member(Pool, Pid, ok),
+                    case Result of
+                        {error, retry} -> json_insert(Pool, Table, Body);
+                        Result -> Result
+                    end
+            catch
+                E:M:St ->
+                    ?LOG_ERROR("Clickhouse client error - ~p ~p ~p ~p",
+                               [E, M, St, {json_insert, Table, Body}]),
+                    pooler:return_member(Pool, Pid, ok),
+                    json_insert(Pool, Table, Body)
             end
     end.
 
